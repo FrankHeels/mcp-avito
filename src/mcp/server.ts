@@ -5,37 +5,41 @@
  * Provides tools for searching and extracting data from Avito.ru
  */
 
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type CallToolRequest,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { AvitoScraper } from '../core/scraper.js';
+import { ScraperError } from '../core/types.js';
 import type { SearchFilters } from '../core/types.js';
 
 // Global scraper instance (reused across requests)
 let scraper: AvitoScraper | null = null;
+let stopping = false;
 
-// Get or create scraper instance
-async function getScraper(): Promise<AvitoScraper> {
-  if (!scraper) {
-    scraper = new AvitoScraper({
-      headless: true,
-      timeout: 30000,
-      delayMs: [1000, 3000],
-    });
+function getScraper(): AvitoScraper {
+  return scraper ??= new AvitoScraper({
+    headless: false,
+    userDataDir: resolve(process.env.AVITO_PROFILE_DIR || join(homedir(), '.avito-scraper', 'mcp-profile')),
+  });
+}
+
+function isAvitoUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const { protocol, hostname, username, password, port } = new URL(value);
+    return (protocol === 'https:' || protocol === 'http:') &&
+      (hostname === 'avito.ru' || hostname.endsWith('.avito.ru')) &&
+      !username && !password && !port;
+  } catch {
+    return false;
   }
-
-  // If the browser process died (e.g. crash or was killed), reset to headless
-  // and re-initialize so subsequent calls get a fresh browser.
-  if (!scraper.isInitialized()) {
-    scraper.setHeadless(true);
-    await scraper.initialize();
-  }
-
-  return scraper;
 }
 
 // Define available tools
@@ -144,8 +148,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools };
 });
 
-// Handle tool execution
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+async function callTool(request: CallToolRequest) {
   const { name, arguments: args } = request.params;
 
   if (!args) {
@@ -176,7 +179,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           sort: (sort === 'date' || sort === 'price_asc' || sort === 'price_desc') ? sort : 'default',
         };
 
-        const scraperInstance = await getScraper();
+        const scraperInstance = getScraper();
         const results = await scraperInstance.search(filters);
 
         return {
@@ -198,24 +201,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'avito_get_details': {
-        const url = args.url as string;
+        const url = args.url;
 
-        if (!url || !url.includes('avito.ru')) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  success: false,
-                  error: 'Invalid Avito URL',
-                }),
-              },
-            ],
-            isError: true,
-          };
+        if (!isAvitoUrl(url)) {
+          throw new ScraperError('Invalid Avito URL', 'INVALID_AVITO_URL');
         }
 
-        const scraperInstance = await getScraper();
+        const scraperInstance = getScraper();
         const details = await scraperInstance.getItemDetails(url);
 
         return {
@@ -246,7 +238,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
 
         const limit = (args.limit as number) || Infinity;
-        const scraperInstance = await getScraper();
+        const scraperInstance = getScraper();
         const allResults = [];
 
         for await (const result of scraperInstance.searchAllPages(filters)) {
@@ -296,6 +288,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           text: JSON.stringify({
             success: false,
             error: error.message,
+            code: error instanceof ScraperError ? error.code : undefined,
             stack: error.stack,
           }),
         },
@@ -303,24 +296,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
+}
+
+// One browser tab is shared across tools, so finish each call before navigating again.
+let toolQueue: Promise<unknown> = Promise.resolve();
+server.setRequestHandler(CallToolRequestSchema, (request, { signal }) => {
+  const result = toolQueue.then(() => {
+    signal.throwIfAborted();
+    if (stopping) throw new Error('MCP server is stopping');
+    return callTool(request);
+  });
+  toolQueue = result.catch(() => {});
+  return result;
 });
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
+async function shutdown(): Promise<void> {
+  if (stopping) return;
+  stopping = true;
   console.error('Останавливаем MCP-сервер...');
-  if (scraper) {
-    await scraper.close();
+  try {
+    await scraper?.close();
+  } finally {
+    process.exit(0);
   }
-  process.exit(0);
-});
+}
 
-process.on('SIGTERM', async () => {
-  console.error('Останавливаем MCP-сервер...');
-  if (scraper) {
-    await scraper.close();
-  }
-  process.exit(0);
-});
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
+process.stdin.once('end', shutdown);
 
 // Start server
 async function main() {

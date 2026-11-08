@@ -2,7 +2,7 @@
  * Browser manager with Playwright
  */
 
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Page } from 'playwright';
 import ProxyChain from 'proxy-chain';
 import { getRandomUserAgent } from '../utils/user-agents.js';
 import type { ProxyConfig, ScraperOptions } from './types.js';
@@ -13,6 +13,7 @@ export class BrowserManager {
   private page: Page | null = null;
   private options: ScraperOptions;
   private proxyServer: any = null;
+  private opening: Promise<void> | null = null;
 
   constructor(options: ScraperOptions = {}) {
     this.options = {
@@ -23,14 +24,17 @@ export class BrowserManager {
   }
 
   async initialize(proxy?: ProxyConfig): Promise<void> {
-    const launchOptions: any = {
-      headless: this.options.headless,
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--no-sandbox',
-      ],
-    };
+    if (this.isInitialized()) return;
+    const opening = this.opening ??= this.open(proxy);
+    try {
+      await opening;
+    } finally {
+      if (this.opening === opening) this.opening = null;
+    }
+  }
+
+  private async open(proxy?: ProxyConfig): Promise<void> {
+    const launchOptions: LaunchOptions = { headless: this.options.headless };
 
     // Use local Chrome if available
     const localChromePath = process.env.CHROME_EXECUTABLE_PATH || './chrome-win64/chrome.exe';
@@ -107,7 +111,33 @@ export class BrowserManager {
       }
     }
 
-    this.browser = await chromium.launch(launchOptions);
+    if (this.options.userDataDir) {
+      const context = await chromium.launchPersistentContext(this.options.userDataDir, {
+        ...launchOptions,
+        chromiumSandbox: true,
+        locale: 'ru-RU',
+        viewport: null,
+      });
+      this.context = context;
+      this.page = context.pages()[0] ?? null;
+      this.page?.setDefaultTimeout(this.options.timeout ?? 30000);
+      context.once('close', () => {
+        if (this.context === context) {
+          this.context = null;
+          this.page = null;
+        }
+      });
+      return;
+    }
+
+    this.browser = await chromium.launch({
+      ...launchOptions,
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--disable-dev-shm-usage',
+        '--no-sandbox',
+      ],
+    });
 
     // Create context with stealth settings
     this.context = await this.browser.newContext({
@@ -143,13 +173,11 @@ export class BrowserManager {
   }
 
   /**
-   * Get a reusable page. Instead of opening a new browser window/tab on every
-   * call (which looks suspicious to Avito and triggers captcha), reuse the same
-   * page across requests. The page is created once and navigated repeatedly.
+   * Reuse the same page across requests so the user can see the current task.
    */
   async getPage(): Promise<Page> {
     // If the browser process died or context was closed, re-initialize.
-    if (!this.browser || !this.context || !this.browser.isConnected()) {
+    if (!this.isInitialized()) {
       await this.restartBrowser();
     }
 
@@ -173,69 +201,30 @@ export class BrowserManager {
    * Fully shut down the current browser (if any) and start a fresh one.
    */
   private async restartBrowser(): Promise<void> {
-    this.page = null;
-    if (this.context) {
-      try {
-        await this.context.close();
-      } catch {
-        // ignore — already dead
-      }
-      this.context = null;
-    }
-    if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch {
-        // ignore — already dead
-      }
-      this.browser = null;
-    }
-    if (this.proxyServer) {
-      try {
-        await this.proxyServer.close(true);
-      } catch {
-        // ignore
-      }
-      this.proxyServer = null;
-    }
+    await this.close();
     await this.initialize();
   }
 
   async close(): Promise<void> {
+    // The MCP client may disconnect while Chromium is still starting.
+    await this.opening?.catch(() => {});
+    const { context, browser, proxyServer } = this;
     this.page = null;
-    if (this.context) {
-      await this.context.close();
-      this.context = null;
-    }
-    if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
-    }
-    if (this.proxyServer) {
-      console.error('Закрываем локальный прокси-сервер...');
-      try {
-        await this.proxyServer.close(true);
-      } catch (err) {
-        console.error('Ошибка при закрытии прокси-сервера:', err);
-      }
-      this.proxyServer = null;
-    }
+    this.context = null;
+    this.browser = null;
+    this.proxyServer = null;
+    await context?.close().catch((error) => console.error('Ошибка при закрытии контекста:', error.message));
+    await browser?.close().catch((error) => console.error('Ошибка при закрытии браузера:', error.message));
+    await proxyServer?.close(true).catch((error: Error) =>
+      console.error('Ошибка при закрытии прокси-сервера:', error.message),
+    );
+  }
+
+  setHeadless(headless: boolean): void {
+    this.options.headless = headless;
   }
 
   isInitialized(): boolean {
-    if (this.browser === null || this.context === null) {
-      return false;
-    }
-    // Check if the browser process is still connected
-    if (!this.browser.isConnected()) {
-      return false;
-    }
-    // Verify the context is still usable by checking a property
-    try {
-      this.context.pages();
-    } catch {
-      return false;
-    }
-    return true;
+    return this.context !== null && (Boolean(this.options.userDataDir) || this.browser?.isConnected() === true);
   }
 }

@@ -4,6 +4,8 @@
 
 MCP (Model Context Protocol) сервер позволяет Claude Desktop и opencode использовать Avito Scraper напрямую через встроенные инструменты.
 
+Первый поисковый запрос или запрос карточки открывает видимое окно Chromium. MCP переиспользует вкладку, а профиль хранится на диске в `~/.avito-scraper/mcp-profile`. При необходимости задайте отдельный абсолютный путь через `AVITO_PROFILE_DIR`. Для одновременной работы нескольких MCP-клиентов укажите отдельный каталог каждому клиенту.
+
 ## Установка
 
 ### 1. Собрать проект
@@ -11,6 +13,7 @@ MCP (Model Context Protocol) сервер позволяет Claude Desktop и o
 ```bash
 cd C:\Temp\mcp-avito
 pnpm install
+pnpm exec playwright install chromium
 pnpm build
 ```
 
@@ -47,10 +50,7 @@ C:\Users\<USERNAME>\AppData\Roaming\Claude\claude_desktop_config.json
       "command": "node",
       "args": [
         "C:\\Temp\\mcp-avito\\dist\\mcp\\server.js"
-      ],
-      "env": {
-        "CHROME_EXECUTABLE_PATH": "C:\\Temp\\mcp-avito\\chrome-win64\\chrome.exe"
-      }
+      ]
     }
   }
 }
@@ -66,10 +66,7 @@ C:\Users\<USERNAME>\AppData\Roaming\Claude\claude_desktop_config.json
       "command": "node",
       "args": [
         "/absolute/path/to/mcp-avito/dist/mcp/server.js"
-      ],
-      "env": {
-        "CHROME_EXECUTABLE_PATH": "/absolute/path/to/mcp-avito/chrome-win64/chrome"
-      }
+      ]
     }
   }
 }
@@ -92,10 +89,7 @@ opencode подключает MCP-сервер через проектный к�
     "avito": {
       "type": "local",
       "command": ["node", "dist/mcp/server.js"],
-      "enabled": true,
-      "env": {
-        "CHROME_EXECUTABLE_PATH": "C:\\_develop\\_neuro\\mcp-avito\\chrome-win64\\chrome.exe"
-      }
+      "enabled": true
     }
   }
 }
@@ -280,14 +274,11 @@ Avito MCP server running on stdio
 - Добавьте переменную окружения `CHROME_EXECUTABLE_PATH` в конфиг
 - Или установите Chromium: `npx playwright install chromium`
 
-#### 3. "Captcha detected"
+#### 3. Капча и ограничения доступа
 
-**Проблема:** Avito показывает капчу
-
-**Решение:**
-- MCP сервер работает в headless режиме и не может решить капчу автоматически
-- Используйте прокси (см. раздел ниже)
-- Добавьте задержки между запросами
+- `CAPTCHA_DETECTED` — пройдите проверку вручную в открытом окне Chromium и повторите запрос.
+- `AVITO_ACCESS_RESTRICTED` — Авито ограничил доступ. В открытом окне можно увидеть сообщение площадки.
+- `AVITO_RATE_LIMITED` — Авито вернул HTTP 429. Повторите запрос позже.
 
 ---
 
@@ -354,10 +345,8 @@ PROXY_ROTATION=round-robin
 
 ⚠️ **Важно:**
 
-- MCP сервер запускает headless браузер на вашей машине
-- Все запросы к Avito идут с вашего IP (если не используете прокси)
-- Чрезмерное использование может привести к бану IP на Avito
-- Рекомендуется использовать с прокси для продакшена
+- MCP открывает Chromium с выделенным профилем. Используйте для `AVITO_PROFILE_DIR` отдельный каталог.
+- Профиль может содержать cookies и данные сессии. Храните его вне репозитория.
 
 ---
 

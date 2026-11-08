@@ -4,10 +4,7 @@
     "avito": {
       "type": "local",
       "command": ["node", "dist/mcp/server.js"],
-      "enabled": true,
-      "env": {
-        "CHROME_EXECUTABLE_PATH": "C:\\_develop\\_neuro\\mcp-avito\\chrome-win64\\chrome.exe"
-      }
+      "enabled": true
     }
   }
 }

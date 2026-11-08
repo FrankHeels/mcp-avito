@@ -81,6 +81,7 @@ export interface ProxyOptions {
 
 export interface ScraperOptions {
   headless?: boolean;
+  userDataDir?: string; // dedicated Chromium profile for the interactive browser
   timeout?: number;
   retries?: number;
   delayMs?: [number, number]; // [min, max]

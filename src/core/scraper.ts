@@ -8,13 +8,12 @@ import { AvitoParser } from './parser.js';
 import { ProxyManager } from './proxy-manager.js';
 import { buildSearchUrl } from '../utils/url-builder.js';
 import { randomSleep } from '../utils/delays.js';
+import { CaptchaError, ScraperError } from './types.js';
 import type {
   SearchFilters,
   SearchResult,
   ItemDetails,
   ScraperOptions,
-  ScraperError,
-  CaptchaError,
 } from './types.js';
 
 export class AvitoScraper {
@@ -22,6 +21,7 @@ export class AvitoScraper {
   private parser: AvitoParser;
   private options: ScraperOptions;
   private proxyManager: ProxyManager | null = null;
+  private captchaPage: Page | null = null;
 
   constructor(options: ScraperOptions = {}) {
     this.options = {
@@ -81,7 +81,7 @@ export class AvitoScraper {
     // Reuse the same page/window across requests instead of opening a new
     // browser window every time (which looks suspicious and triggers captcha).
     // A fresh page is only created on the first request.
-    let page = await this.browser.getPage();
+    let page = await this.getPageForNavigation();
 
     {
       // Rotate proxy if needed
@@ -97,7 +97,7 @@ export class AvitoScraper {
       // (trackers, hcaptcha) that may never let the load event fire,
       // which would time out page.goto even though the content is ready.
       // Content readiness is handled by waitForResults() below.
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
       // Wait for page to stabilize
       await page.waitForTimeout(3000);
@@ -107,35 +107,12 @@ export class AvitoScraper {
         await randomSleep(this.options.delayMs[0], this.options.delayMs[1]);
       }
 
-      // Check for captcha (with error handling).
-      // If captcha is detected in headless mode and manualCaptchaFallback is
-      // enabled, restart the browser in headed mode so the user can solve it.
-      try {
-        if (await this.parser.detectCaptcha(page)) {
-          page = await this.resolveCaptcha(page, url);
-        }
-      } catch (error: any) {
-        if (error.message?.includes('Captcha')) {
-          throw error;
-        }
-        console.error('Предупреждение: не удалось проверить капчу:', error.message);
-      }
-
-      // Check if blocked
-      try {
-        if (await this.parser.isBlocked(page)) {
-          throw new Error('Access blocked') as ScraperError;
-        }
-      } catch (error: any) {
-        if (error.message?.includes('Access blocked')) {
-          throw error;
-        }
-        console.error('Предупреждение: не удалось проверить блокировку:', error.message);
-      }
+      page = await this.checkPageAccess(page, url, response?.status());
 
       // Wait for results
       const hasResults = await this.parser.waitForResults(page);
       if (!hasResults) {
+        await this.checkPageAccess(page, url);
         console.error('Результаты не найдены или страница не загрузилась');
         return [];
       }
@@ -146,6 +123,38 @@ export class AvitoScraper {
 
       return results;
     }
+  }
+
+  private async getPageForNavigation(): Promise<Page> {
+    const page = await this.browser.getPage();
+    if (page === this.captchaPage && await this.parser.detectCaptcha(page)) {
+      this.requireManualVerification(page);
+    }
+    this.captchaPage = null;
+    return page;
+  }
+
+  private requireManualVerification(page: Page): never {
+    this.captchaPage = page;
+    throw new CaptchaError('Пройдите проверку Авито в открытом окне браузера и повторите запрос.');
+  }
+
+  private async checkPageAccess(page: Page, url: string, status?: number): Promise<Page> {
+    if (status === 429) {
+      throw new ScraperError('Авито ограничил частоту запросов (HTTP 429). Повторите позже.', 'AVITO_RATE_LIMITED');
+    }
+    if (status === 403 || await this.parser.isBlocked(page)) {
+      const reason = status === 403 ? ' (HTTP 403)' : '';
+      throw new ScraperError(`Авито ограничил доступ${reason}. Проверьте открытое окно браузера.`, 'AVITO_ACCESS_RESTRICTED');
+    }
+    if (status !== undefined && status >= 400) {
+      throw new ScraperError(`Авито вернул HTTP ${status}.`, 'AVITO_HTTP_ERROR');
+    }
+    if (!await this.parser.detectCaptcha(page)) return page;
+    if (this.options.userDataDir) {
+      this.requireManualVerification(page);
+    }
+    return this.resolveCaptcha(page, url);
   }
 
   /**
@@ -162,7 +171,7 @@ export class AvitoScraper {
   private async resolveCaptcha(page: Page, url: string): Promise<Page> {
     // Headless without fallback: we can't show the browser window, fail fast.
     if (this.options.headless && !this.options.manualCaptchaFallback) {
-      throw new Error('Captcha detected') as CaptchaError;
+      throw new CaptchaError('Captcha detected');
     }
 
     // Headless with fallback: restart in headed mode so the user can solve it.
@@ -172,7 +181,7 @@ export class AvitoScraper {
 
       await this.browser.close();
 
-      this.options.headless = false;
+      this.setHeadless(false);
       const proxy = this.proxyManager?.getProxy() || undefined;
       await this.browser.initialize(proxy);
 
@@ -213,7 +222,7 @@ export class AvitoScraper {
     await this.hideCaptchaPopup(page);
 
     if (!solved) {
-      throw new Error('Captcha still present after manual solution attempt') as CaptchaError;
+      throw new CaptchaError('Captcha still present after manual solution attempt');
     }
     console.error('✓ Капча решена, продолжаем...\n');
 
@@ -382,21 +391,18 @@ export class AvitoScraper {
 
     console.error(`Получаем детали: ${url}`);
 
-    let page = await this.browser.getPage();
+    let page = await this.getPageForNavigation();
 
     {
       // Navigate to item page
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded' });
 
       // Add random delay
       if (this.options.delayMs) {
         await randomSleep(this.options.delayMs[0], this.options.delayMs[1]);
       }
 
-      // Check for captcha (with manual fallback if headless)
-      if (await this.parser.detectCaptcha(page)) {
-        page = await this.resolveCaptcha(page, url);
-      }
+      page = await this.checkPageAccess(page, url, response?.status());
 
       // Parse details
       const details = await this.parser.parseItemDetails(page);
@@ -451,9 +457,10 @@ export class AvitoScraper {
   }
 
   /**
-   * Set headless mode (used to reset after a captcha fallback restart).
+   * Set headless mode for the next browser launch.
    */
   setHeadless(headless: boolean): void {
     this.options.headless = headless;
+    this.browser.setHeadless(headless);
   }
 }
