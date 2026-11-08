@@ -273,9 +273,10 @@ node dist/cli.js search "Samsung" --headless false
   "description": "Полное описание товара...",
   "seller": {
     "name": "Иван И.",
-    "rating": 4.9,
     "reviewsCount": 150
   },
+  "availableQuantity": null,
+  "availabilityNote": "уточнить у продавца",
   "location": "Москва, м. Тверская",
   "publishedAt": "2026-02-04",
   "views": 245,
@@ -283,12 +284,16 @@ node dist/cli.js search "Samsung" --headless false
     "https://90.img.avito.st/...",
     "https://91.img.avito.st/..."
   ],
-  "parameters": {
+  "specifications": {
     "Состояние": "Б/у",
     "Тип": "SSD накопитель"
   }
 }
 ```
+
+Эти поля возвращают инструмент MCP `avito_get_details` и команда CLI `details`.
+Число отзывов берётся из блока продавца в карточке. Если счётчик не показан, значение равно `null`.
+Количество отражает явное число в поле наличия или в описании объявления. При точном количестве `availabilityNote` равно `null`. Если есть только диапазон или приблизительная формулировка, число отсутствует или источники расходятся, `availableQuantity` равно `null`, а `availabilityNote` содержит «уточнить у продавца».
 
 ---
 

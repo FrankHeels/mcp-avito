@@ -5,6 +5,7 @@
 import type { Page } from 'playwright';
 import type { SearchResult, ItemDetails } from './types.js';
 import { normalizeItemUrl } from '../utils/url-builder.js';
+import { parseAvailableQuantity, parseSellerReviewCount } from './item-counts.js';
 
 export class AvitoParser {
   /**
@@ -166,13 +167,13 @@ export class AvitoParser {
         }
       }
 
-      const fullDescriptionDom =
-        text(document.querySelector('[itemprop="description"]')) ||
-        text(
-          document.querySelector(
-            '[data-marker*="description" i], [class*="item-description" i], [class*="description" i]'
-          )
-        );
+      const descriptionElement = document.querySelector(
+        '[data-marker*="description" i], [class*="item-description" i], [class*="description" i]',
+      );
+      const microdataDescription = document.querySelector('[itemprop="description"]');
+      const fullDescriptionDom = text(microdataDescription) || text(descriptionElement);
+      const stockDescriptionElement =
+        document.querySelector('[data-marker="item-view/item-description"]') || microdataDescription;
 
       // Item address marker, then the URL region slug (/kaliningrad/...),
       // then the header region switcher ("Калининград, район"), then
@@ -220,6 +221,11 @@ export class AvitoParser {
       const sellerNameDom =
         text(document.querySelector('[data-marker="seller-info/name"]')) ||
         text(document.querySelector('[class*="seller-info-name" i]'));
+      const reviewCaptions = Array.from(document.querySelectorAll(
+        '[data-marker="item-view/seller-info"] [data-marker="rating-caption/rating"], ' +
+        '.seller-info-rating [data-marker="rating-caption/rating"], ' +
+        '[data-marker="seller-info/reviews"]',
+      )).flatMap((element) => [text(element), element.getAttribute('aria-label') || '']);
 
       const viewsText =
         text(document.querySelector('[data-marker="item-view/total-views"]')) ||
@@ -282,6 +288,11 @@ export class AvitoParser {
         imageUrl: images[0] || '',
         description: String(fullDescription).substring(0, 200),
         fullDescription: String(fullDescription),
+        stockDescription:
+          (stockDescriptionElement instanceof HTMLElement && stockDescriptionElement.innerText.trim()) ||
+          text(stockDescriptionElement) ||
+          (ld?.['@type'] === 'Product' && typeof ld.description === 'string' ? ld.description : ''),
+        reviewCaptions,
         images,
         seller: {
           name: sellerName,
@@ -291,7 +302,17 @@ export class AvitoParser {
       };
     });
 
-    return details;
+    const { stockDescription, reviewCaptions, ...item } = details;
+    const availableQuantity = parseAvailableQuantity(item.specifications, stockDescription);
+    return {
+      ...item,
+      seller: {
+        ...item.seller,
+        reviewsCount: parseSellerReviewCount(reviewCaptions),
+      },
+      availableQuantity,
+      availabilityNote: availableQuantity === null ? 'уточнить у продавца' : null,
+    };
   }
 
   /**

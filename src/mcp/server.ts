@@ -77,7 +77,7 @@ const tools: Tool[] = [
   },
   {
     name: 'avito_get_details',
-    description: 'Get detailed information about a specific item on Avito.ru. Retrieves full description, seller info, parameters, images, and other details.',
+    description: 'Get Avito item details, including full description, seller review count, and exact advertised quantity when shown. A null quantity includes a note to ask the seller.',
     inputSchema: {
       type: 'object',
       properties: {

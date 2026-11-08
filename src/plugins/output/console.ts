@@ -55,7 +55,10 @@ export class ConsoleOutput {
 
     if (details.seller) {
       console.log(chalk.bold('\nПродавец:'), details.seller.name);
+      console.log(chalk.bold('Отзывы:'), details.seller.reviewsCount ?? 'нет данных');
     }
+
+    console.log(chalk.bold('В наличии:'), details.availableQuantity ?? details.availabilityNote);
 
     if (details.viewsCount) {
       console.log(chalk.bold('Просмотры:'), details.viewsCount);

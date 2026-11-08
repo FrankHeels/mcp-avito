@@ -29,8 +29,11 @@ export interface SearchResult {
 export interface ItemDetails extends SearchResult {
   fullDescription: string;
   images: string[];
+  availableQuantity: number | null;
+  availabilityNote: 'уточнить у продавца' | null;
   seller: {
     name: string;
+    reviewsCount: number | null;
     rating?: number;
     registeredAt?: string;
     url?: string;
