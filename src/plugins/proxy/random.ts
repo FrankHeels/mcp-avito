@@ -5,6 +5,7 @@
 
 import type { ProxyConfig } from '../../core/types.js';
 import type { IProxyRotationStrategy } from './base.js';
+import { getProxyKey } from '../../core/proxy-identity.js';
 
 export class RandomRotation implements IProxyRotationStrategy {
   private proxies: ProxyConfig[] = [];
@@ -27,13 +28,13 @@ export class RandomRotation implements IProxyRotationStrategy {
   }
 
   markFailed(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     this.failedProxies.add(key);
     console.error(`Прокси помечен как нерабочий: ${key}`);
   }
 
   markSuccess(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     this.failedProxies.delete(key);
   }
 
@@ -50,15 +51,12 @@ export class RandomRotation implements IProxyRotationStrategy {
   }
 
   removeProxy(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
-    this.proxies = this.proxies.filter((p) => this.getProxyKey(p) !== key);
+    const key = getProxyKey(proxy);
+    this.proxies = this.proxies.filter((p) => getProxyKey(p) !== key);
   }
 
   private getAvailableProxies(): ProxyConfig[] {
-    return this.proxies.filter((p) => !this.failedProxies.has(this.getProxyKey(p)));
+    return this.proxies.filter((p) => !this.failedProxies.has(getProxyKey(p)));
   }
 
-  private getProxyKey(proxy: ProxyConfig): string {
-    return `${proxy.type}://${proxy.host}:${proxy.port}`;
-  }
 }

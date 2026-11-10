@@ -8,6 +8,7 @@ import type { IProxyRotationStrategy } from '../plugins/proxy/base.js';
 import { SequentialRotation } from '../plugins/proxy/sequential.js';
 import { RandomRotation } from '../plugins/proxy/random.js';
 import { RoundRobinRotation } from '../plugins/proxy/round-robin.js';
+import { getProxyKey } from './proxy-identity.js';
 
 export class ProxyManager {
   private strategy: IProxyRotationStrategy;
@@ -194,8 +195,8 @@ export class ProxyManager {
       const proxy = tempStrategy.next();
       if (!proxy) break;
 
-      const proxyKey = `${proxy.type}://${proxy.host}:${proxy.port}`;
-      if (!proxies.some((p) => `${p.type}://${p.host}:${p.port}` === proxyKey)) {
+      const proxyKey = getProxyKey(proxy);
+      if (!proxies.some((p) => getProxyKey(p) === proxyKey)) {
         proxies.push(proxy);
       }
 

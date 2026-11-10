@@ -5,6 +5,7 @@
 
 import type { ProxyConfig } from '../../core/types.js';
 import type { IProxyRotationStrategy } from './base.js';
+import { getProxyKey } from '../../core/proxy-identity.js';
 
 interface ProxyStats {
   proxy: ProxyConfig;
@@ -29,7 +30,7 @@ export class RoundRobinRotation implements IProxyRotationStrategy {
     this.failCooldownMs = failCooldownMs;
 
     proxies.forEach((proxy) => {
-      const key = this.getProxyKey(proxy);
+      const key = getProxyKey(proxy);
       this.proxyStats.set(key, {
         proxy,
         successCount: 0,
@@ -52,7 +53,7 @@ export class RoundRobinRotation implements IProxyRotationStrategy {
     this.currentIndex = (this.currentIndex + 1) % available.length;
 
     // Update last used time
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     const stats = this.proxyStats.get(key);
     if (stats) {
       stats.lastUsed = Date.now();
@@ -62,7 +63,7 @@ export class RoundRobinRotation implements IProxyRotationStrategy {
   }
 
   markFailed(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     const stats = this.proxyStats.get(key);
 
     if (stats) {
@@ -78,7 +79,7 @@ export class RoundRobinRotation implements IProxyRotationStrategy {
   }
 
   markSuccess(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     const stats = this.proxyStats.get(key);
 
     if (stats) {
@@ -99,7 +100,7 @@ export class RoundRobinRotation implements IProxyRotationStrategy {
   }
 
   addProxy(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     if (!this.proxyStats.has(key)) {
       this.proxyStats.set(key, {
         proxy,
@@ -112,7 +113,7 @@ export class RoundRobinRotation implements IProxyRotationStrategy {
   }
 
   removeProxy(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     this.proxyStats.delete(key);
   }
 
@@ -153,7 +154,4 @@ export class RoundRobinRotation implements IProxyRotationStrategy {
     return available;
   }
 
-  private getProxyKey(proxy: ProxyConfig): string {
-    return `${proxy.type}://${proxy.host}:${proxy.port}`;
-  }
 }

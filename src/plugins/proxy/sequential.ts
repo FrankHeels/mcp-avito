@@ -5,6 +5,7 @@
 
 import type { ProxyConfig } from '../../core/types.js';
 import type { IProxyRotationStrategy } from './base.js';
+import { getProxyKey } from '../../core/proxy-identity.js';
 
 export class SequentialRotation implements IProxyRotationStrategy {
   private proxies: ProxyConfig[] = [];
@@ -21,12 +22,12 @@ export class SequentialRotation implements IProxyRotationStrategy {
     }
 
     // Try to find a non-failed proxy
-    const startIndex = this.currentIndex;
+    this.currentIndex %= this.proxies.length;
     let attempts = 0;
 
     while (attempts < this.proxies.length) {
       const proxy = this.proxies[this.currentIndex];
-      const proxyKey = this.getProxyKey(proxy);
+      const proxyKey = getProxyKey(proxy);
 
       // Move to next index
       this.currentIndex = (this.currentIndex + 1) % this.proxies.length;
@@ -43,13 +44,13 @@ export class SequentialRotation implements IProxyRotationStrategy {
   }
 
   markFailed(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     this.failedProxies.add(key);
     console.error(`Прокси помечен как нерабочий: ${key}`);
   }
 
   markSuccess(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
+    const key = getProxyKey(proxy);
     this.failedProxies.delete(key);
   }
 
@@ -59,7 +60,7 @@ export class SequentialRotation implements IProxyRotationStrategy {
   }
 
   getAvailableCount(): number {
-    return this.proxies.length - this.failedProxies.size;
+    return this.proxies.filter((proxy) => !this.failedProxies.has(getProxyKey(proxy))).length;
   }
 
   addProxy(proxy: ProxyConfig): void {
@@ -67,11 +68,8 @@ export class SequentialRotation implements IProxyRotationStrategy {
   }
 
   removeProxy(proxy: ProxyConfig): void {
-    const key = this.getProxyKey(proxy);
-    this.proxies = this.proxies.filter((p) => this.getProxyKey(p) !== key);
+    const key = getProxyKey(proxy);
+    this.proxies = this.proxies.filter((p) => getProxyKey(p) !== key);
   }
 
-  private getProxyKey(proxy: ProxyConfig): string {
-    return `${proxy.type}://${proxy.host}:${proxy.port}`;
-  }
 }
