@@ -5,8 +5,6 @@
  * Provides tools for searching and extracting data from Avito.ru
  */
 
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -17,17 +15,16 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { AvitoScraper } from '../core/scraper.js';
 import { ScraperError } from '../core/types.js';
-import type { SearchFilters } from '../core/types.js';
+import type { ScraperOptions, SearchFilters } from '../core/types.js';
+import { loadMcpOptions } from './config.js';
 
 // Global scraper instance (reused across requests)
 let scraper: AvitoScraper | null = null;
 let stopping = false;
+let scraperOptions: ScraperOptions;
 
 function getScraper(): AvitoScraper {
-  return scraper ??= new AvitoScraper({
-    headless: false,
-    userDataDir: resolve(process.env.AVITO_PROFILE_DIR || join(homedir(), '.avito-scraper', 'mcp-profile')),
-  });
+  return scraper ??= new AvitoScraper(scraperOptions);
 }
 
 function isAvitoUrl(value: unknown): value is string {
@@ -323,10 +320,12 @@ async function shutdown(): Promise<void> {
 
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
+process.once('SIGHUP', shutdown);
 process.stdin.once('end', shutdown);
 
 // Start server
 async function main() {
+  scraperOptions = loadMcpOptions();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Avito MCP сервер работает через stdio');

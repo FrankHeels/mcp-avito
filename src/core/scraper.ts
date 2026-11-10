@@ -8,12 +8,13 @@ import { AvitoParser } from './parser.js';
 import { ProxyManager } from './proxy-manager.js';
 import { buildSearchUrl } from '../utils/url-builder.js';
 import { randomSleep } from '../utils/delays.js';
-import { CaptchaError, ScraperError } from './types.js';
+import { CaptchaError, ProxyError, ScraperError } from './types.js';
 import type {
   SearchFilters,
   SearchResult,
   ItemDetails,
   ScraperOptions,
+  ProxyConfig,
 } from './types.js';
 
 export class AvitoScraper {
@@ -22,6 +23,8 @@ export class AvitoScraper {
   private options: ScraperOptions;
   private proxyManager: ProxyManager | null = null;
   private captchaPage: Page | null = null;
+  private proxiesLoaded = false;
+  private activeProxy: ProxyConfig | undefined;
 
   constructor(options: ScraperOptions = {}) {
     this.options = {
@@ -41,7 +44,7 @@ export class AvitoScraper {
     // Initialize proxy manager if proxy options provided
     if (this.options.proxy?.enabled) {
       this.proxyManager = new ProxyManager(
-        [],
+        this.options.proxy.proxies || [],
         this.options.proxy.rotation || 'sequential',
         this.options.proxy.rotateEveryN || 0
       );
@@ -52,19 +55,20 @@ export class AvitoScraper {
    * Initialize scraper
    */
   async initialize(): Promise<void> {
+    if (this.browser.isInitialized()) return;
     // Load proxies if configured
-    if (this.proxyManager && this.options.proxy?.listFile) {
-      console.error(`Загружаем прокси из: ${this.options.proxy.listFile}`);
-      const count = await this.proxyManager.loadFromFile(this.options.proxy.listFile);
-      console.error(`Загружено ${count} прокси`);
+    if (this.proxyManager && this.options.proxy?.listFile && !this.proxiesLoaded) {
+      await this.proxyManager.loadFromFile(this.options.proxy.listFile);
+      this.proxiesLoaded = true;
     }
 
     // Get proxy for browser initialization
-    const proxy = this.proxyManager?.getProxy() || undefined;
+    const proxy = this.getProxy();
     if (proxy) {
       console.error(`Инициализируем браузер с прокси: ${proxy.type}://${proxy.host}:${proxy.port}`);
     }
     await this.browser.initialize(proxy);
+    this.activeProxy = proxy;
   }
 
   /**
@@ -84,20 +88,12 @@ export class AvitoScraper {
     let page = await this.getPageForNavigation();
 
     {
-      // Rotate proxy if needed
-      if (this.proxyManager && this.options.proxy?.rotateOnError) {
-        const proxy = this.proxyManager.getProxy();
-        if (proxy) {
-          // Note: Changing proxy requires re-initializing browser
-          // For now, we'll use the same proxy throughout the session
-        }
-      }
       // Navigate to search page.
       // Note: do NOT wait for 'load' — Avito pages keep hanging requests
       // (trackers, hcaptcha) that may never let the load event fire,
       // which would time out page.goto even though the content is ready.
       // Content readiness is handled by waitForResults() below.
-      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      const response = await this.navigate(page, url, 60000);
 
       // Wait for page to stabilize
       await page.waitForTimeout(3000);
@@ -126,12 +122,43 @@ export class AvitoScraper {
   }
 
   private async getPageForNavigation(): Promise<Page> {
-    const page = await this.browser.getPage();
+    let page = await this.browser.getPage();
     if (page === this.captchaPage && await this.parser.detectCaptcha(page)) {
       this.requireManualVerification(page);
     }
     this.captchaPage = null;
+    const proxy = this.getProxy();
+    if (proxy !== this.activeProxy) {
+      await this.browser.close();
+      await this.browser.initialize(proxy);
+      this.activeProxy = proxy;
+      page = await this.browser.getPage();
+    }
     return page;
+  }
+
+  private getProxy(): ProxyConfig | undefined {
+    if (!this.proxyManager) return undefined;
+    const proxy = this.proxyManager.getProxy();
+    if (!proxy) throw new ProxyError('Нет доступных прокси. Проверьте настройки или перезапустите MCP-сервер.');
+    return proxy;
+  }
+
+  private async navigate(page: Page, url: string, timeout?: number) {
+    this.proxyManager?.recordRequest();
+    try {
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
+      this.proxyManager?.markSuccess();
+      return response;
+    } catch (error) {
+      if (!this.proxyManager) throw error;
+      if (this.options.proxy?.rotateOnError) {
+        this.proxyManager.markFailed();
+        await this.browser.close();
+      }
+      // Do not return upstream URLs or credentials through MCP error responses.
+      throw new ProxyError('Не удалось загрузить страницу через прокси. Проверьте подключение и повторите запрос.');
+    }
   }
 
   private requireManualVerification(page: Page): never {
@@ -140,6 +167,17 @@ export class AvitoScraper {
   }
 
   private async checkPageAccess(page: Page, url: string, status?: number): Promise<Page> {
+    // Respect rate limits even when the response happens to contain a widget.
+    if (status === 429) {
+      throw new ScraperError('Авито ограничил частоту запросов (HTTP 429). Повторите позже.', 'AVITO_RATE_LIMITED');
+    }
+    // A real interactive challenge can be served with HTTP 403 / a firewall title.
+    if (await this.parser.detectCaptcha(page)) return this.resolveCaptcha(page, url);
+    await this.assertPageAccess(page, status);
+    return page;
+  }
+
+  private async assertPageAccess(page: Page, status?: number): Promise<void> {
     if (status === 429) {
       throw new ScraperError('Авито ограничил частоту запросов (HTTP 429). Повторите позже.', 'AVITO_RATE_LIMITED');
     }
@@ -150,11 +188,6 @@ export class AvitoScraper {
     if (status !== undefined && status >= 400) {
       throw new ScraperError(`Авито вернул HTTP ${status}.`, 'AVITO_HTTP_ERROR');
     }
-    if (!await this.parser.detectCaptcha(page)) return page;
-    if (this.options.userDataDir) {
-      this.requireManualVerification(page);
-    }
-    return this.resolveCaptcha(page, url);
   }
 
   /**
@@ -169,6 +202,7 @@ export class AvitoScraper {
    * @throws CaptchaError if the captcha is not solved in time or fallback is off.
    */
   private async resolveCaptcha(page: Page, url: string): Promise<Page> {
+    this.captchaPage = page;
     // Headless without fallback: we can't show the browser window, fail fast.
     if (this.options.headless && !this.options.manualCaptchaFallback) {
       throw new CaptchaError('Captcha detected');
@@ -182,51 +216,69 @@ export class AvitoScraper {
       await this.browser.close();
 
       this.setHeadless(false);
-      const proxy = this.proxyManager?.getProxy() || undefined;
-      await this.browser.initialize(proxy);
+      await this.browser.initialize(this.activeProxy);
 
       // Navigate to the same URL in the newly opened (visible) window.
       const freshPage = await this.browser.getPage();
-      await freshPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-      return this.waitForCaptchaResolution(freshPage);
+      this.captchaPage = freshPage;
+      const response = await this.navigate(freshPage, url, 60000);
+      // This also handles the case where reopening removes the challenge but
+      // exposes a 403/429/5xx response. Never parse that response as an item.
+      const accessiblePage = await this.checkPageAccess(freshPage, url, response?.status());
+      this.captchaPage = null;
+      return accessiblePage;
     }
 
     // Headed mode: just ask the user to solve it in the current window.
-    return this.waitForCaptchaResolution(page);
+    return this.waitForCaptchaResolution(page, url);
   }
 
   /**
    * Show the captcha popup in the window and poll until the user solves it,
    * or until the timeout expires.
    */
-  private async waitForCaptchaResolution(page: Page): Promise<Page> {
-    const captchaTimeout = this.options.captchaTimeoutMs || 120000;
-    const pollMs = this.options.captchaPollMs || 3000;
+  private async waitForCaptchaResolution(page: Page, url: string): Promise<Page> {
+    const captchaTimeout = this.options.captchaTimeoutMs ?? 120000;
+    const pollMs = Math.max(1, this.options.captchaPollMs ?? 3000);
 
     console.error('\n⚠️  Обнаружена капча! Пожалуйста, решите её в окне браузера.');
-    await this.showCaptchaPopup(page, captchaTimeout);
-
-    const startedAt = Date.now();
-    let solved = false;
-    while (Date.now() - startedAt < captchaTimeout) {
-      if (!(await this.parser.detectCaptcha(page))) {
-        solved = true;
-        break;
+    const deadline = Date.now() + captchaTimeout;
+    try {
+      while (Date.now() < deadline) {
+        if (page.isClosed()) throw new CaptchaError('Окно ручной проверки закрыто. Повторите запрос.');
+        try {
+          if (!await this.parser.detectCaptcha(page)) {
+            // Disappearance alone is not proof of success (hidden widgets,
+            // intermediate documents, or an in-place solution on a 403 page).
+            // Verify the requested URL using the same context, cookies and proxy.
+            const response = await this.navigate(page, url, Math.max(1, deadline - Date.now()));
+            if (response?.status() === 429) await this.assertPageAccess(page, 429);
+            if (!await this.parser.detectCaptcha(page)) {
+              await this.assertPageAccess(page, response?.status());
+              this.captchaPage = null;
+              console.error('✓ Ручная проверка завершена, доступ к странице подтверждён.\n');
+              return page;
+            }
+          }
+          // Recreate the banner if the challenge navigated to another document.
+          await this.showCaptchaPopup(page, captchaTimeout);
+          const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+          await this.updateCaptchaPopup(page, remaining);
+        } catch (error) {
+          // A human solution often navigates while a DOM probe is in flight.
+          // Retry only that transient case; access/transport errors must propagate.
+          if (!(error instanceof Error) ||
+              !/Execution context was destroyed|Cannot find context with specified id|Frame was detached/.test(error.message)) {
+            throw error;
+          }
+        }
+        await page.waitForTimeout(Math.max(0, Math.min(pollMs, deadline - Date.now())));
       }
-      const remaining = Math.max(0, Math.round((captchaTimeout - (Date.now() - startedAt)) / 1000));
-      await this.updateCaptchaPopup(page, remaining);
-      await page.waitForTimeout(pollMs);
+      throw new CaptchaError('Время ручной проверки истекло. Пройдите её в открытом окне браузера и повторите запрос.');
+    } finally {
+      // Cleanup must not mask the original error if the window navigated/closed.
+      await this.hideCaptchaPopup(page).catch(() => {});
     }
-
-    await this.hideCaptchaPopup(page);
-
-    if (!solved) {
-      throw new CaptchaError('Captcha still present after manual solution attempt');
-    }
-    console.error('✓ Капча решена, продолжаем...\n');
-
-    return page;
   }
 
   /**
@@ -239,7 +291,7 @@ export class AvitoScraper {
     await page.evaluate(
       (timeoutMs) => {
         const popupId = '__avito_captcha_popup__';
-        document.getElementById(popupId)?.remove();
+        if (document.getElementById(popupId)) return;
 
         // Container: fixed, corner-pinned, click-through.
         const container = document.createElement('div');
@@ -254,7 +306,7 @@ export class AvitoScraper {
           'font-family: Arial, sans-serif',
         ].join(';');
 
-        // Box: only this element is interactive.
+        // Informational banner: all clicks pass through to the challenge.
         const box = document.createElement('div');
         box.style.cssText = [
           'background: #fff',
@@ -262,7 +314,7 @@ export class AvitoScraper {
           'border-radius: 10px',
           'padding: 14px 18px',
           'box-shadow: 0 4px 20px rgba(0,0,0,0.25)',
-          'pointer-events: auto',
+          'pointer-events: none',
         ].join(';');
 
         box.innerHTML = [
@@ -319,9 +371,9 @@ export class AvitoScraper {
     }
 
     console.error(`[DEBUG] Открываем: ${url}`);
-    let page = await this.browser.getPage();
+    let page = await this.getPageForNavigation();
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await this.navigate(page, url, 60000);
     await page.waitForTimeout(3000);
 
     try {
@@ -395,7 +447,7 @@ export class AvitoScraper {
 
     {
       // Navigate to item page
-      const response = await page.goto(url, { waitUntil: 'domcontentloaded' });
+      const response = await this.navigate(page, url);
 
       // Add random delay
       if (this.options.delayMs) {

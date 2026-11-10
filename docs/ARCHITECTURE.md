@@ -78,11 +78,10 @@ User Input → CLI Parse → Scraper Init → Execute → Output
 
 **Stealth техники:**
 ```javascript
-// Скрытие webdriver
-navigator.webdriver = false
+// Одинаковый аргумент запуска для обычного и постоянного контекста
+args: ['--disable-blink-features=AutomationControlled']
 
-// Мок плагинов
-navigator.plugins = [1,2,3,4,5]
+// UA и PluginArray остаются нативными, без подмены Firefox/старых Chrome
 
 // Реалистичные настройки
 locale: 'ru-RU'
@@ -193,11 +192,7 @@ chromium.launch({
    - `randomSleep(min, max)` - Случайная задержка
    - Anti-bot protection
 
-2. **user-agents.ts**
-   - Пул реалистичных User-Agent
-   - Chrome, Firefox, Safari на Windows/Mac
-
-3. **url-builder.ts**
+2. **url-builder.ts**
    - `buildSearchUrl(filters)` - Построение URL поиска
    - Кодирование параметров
 
@@ -426,12 +421,12 @@ finally {
 
 ## Безопасность
 
-### Что скрыто от детекции
+### Настройки браузера
 
 ✅ webdriver флаг
-✅ navigator.plugins
-✅ navigator.languages
-✅ User-Agent ротация
+✅ Нативный navigator.plugins
+✅ Языковые свойства через locale Playwright
+✅ Нативный User-Agent фактического Chromium
 ✅ Случайные задержки
 ✅ Реалистичный viewport
 

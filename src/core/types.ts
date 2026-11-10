@@ -69,6 +69,7 @@ export type ProxyRotationStrategy = 'sequential' | 'random' | 'round-robin';
 
 export interface ProxyOptions {
   enabled: boolean;
+  proxies?: ProxyConfig[];
   listFile?: string;
   rotation?: ProxyRotationStrategy;
   rotateOnError?: boolean;
@@ -82,10 +83,11 @@ export interface ProxyOptions {
 export interface ScraperOptions {
   headless?: boolean;
   userDataDir?: string; // dedicated Chromium profile for the interactive browser
+  handleBrowserSignals?: boolean; // false when the host owns graceful shutdown (MCP)
   timeout?: number;
   retries?: number;
   delayMs?: [number, number]; // [min, max]
-  userAgent?: string;
+  userAgent?: string; // explicit override; native Chromium UA is used by default
   proxy?: ProxyOptions;
   captchaTimeoutMs?: number; // how long to wait for manual captcha solution (headed mode)
   captchaPollMs?: number; // how often to re-check whether captcha is solved

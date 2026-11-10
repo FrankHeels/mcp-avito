@@ -157,7 +157,7 @@ test('details: conflicting numbers in the stock field and description require cl
 test('firewall stub ("Доступ ограничен") is detected by title even when body is in an iframe', async () => {
   await withPage('blocked-page.html', async (parser, page) => {
     assert.equal(await parser.isBlocked(page), true, 'isBlocked');
-    assert.equal(await parser.detectCaptcha(page), true, 'detectCaptcha');
+    assert.equal(await parser.detectCaptcha(page), false, 'A plain firewall is not an interactive CAPTCHA');
   });
 });
 

@@ -52,10 +52,6 @@ const details = await scraper.getItemDetails(url);
 - `randomSleep()` - асинхронная задержка
 - `humanDelay()` - "человеческая" задержка
 
-#### user-agents.ts
-- Пул реалистичных user-agents
-- `getRandomUserAgent()` - случайный UA
-
 #### url-builder.ts
 - Построение URL для поиска
 - `buildSearchUrl(filters)` - создание URL с параметрами
@@ -159,9 +155,9 @@ Avito.ru          Structured Data
 
 ## Anti-Detection Strategies
 
-1. **User-Agent Rotation**
-   - Пул реалистичных UA
-   - Случайный выбор при каждой сессии
+1. **Native User-Agent**
+   - Используется UA фактического Chromium с его версией и платформой
+   - Явный `userAgent` применяется в обычном режиме и с постоянным профилем
 
 2. **Random Delays**
    - Задержки между запросами
@@ -169,7 +165,7 @@ Avito.ru          Structured Data
 
 3. **Stealth Mode**
    - Скрытие navigator.webdriver
-   - Мок plugins и languages
+   - Нативные plugins и языковые свойства; локаль задаётся через Playwright
    - Реалистичные настройки браузера
 
 4. **Proxy Support (планируется)**

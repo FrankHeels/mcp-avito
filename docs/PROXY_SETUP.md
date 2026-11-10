@@ -129,7 +129,7 @@ const results = await scraper.search({
 
 ## Environment Variables
 
-Configure proxy settings in `.env`:
+For the MCP server, configure proxy settings in the project-root `.env` or the MCP client's environment (the environment takes precedence). Restart the MCP server after changes. CLI commands continue to use their `--proxy-*` flags.
 
 ```env
 PROXY_ENABLED=true
@@ -138,6 +138,8 @@ PROXY_ROTATION=round-robin
 PROXY_ROTATE_ON_ERROR=true
 PROXY_ROTATE_EVERY_N=10
 ```
+
+For a single proxy, set `PROXY_URL=http://user:password@proxy.example.com:8080` instead of `PROXY_LIST_FILE`. URL-encode special characters in credentials. Relative list paths are resolved from the project root. See [MCP_SETUP.md](MCP_SETUP.md#прокси-поддержка-опционально) for defaults, validation, and rotation behavior.
 
 ## Troubleshooting
 

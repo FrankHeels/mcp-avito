@@ -31,11 +31,11 @@
 - MCP сервер для интеграции с Claude Desktop и opencode ✅
 - 3 инструмента: avito_search, avito_get_details, avito_search_all ✅
 - Автоматическое переиспользование браузера ✅
+- Прокси через переменные окружения или `.env`: `PROXY_URL` / `PROXY_LIST_FILE`, авторизация и ротация ✅
 - См. [docs/MCP_SETUP.md](docs/MCP_SETUP.md) ✅
 
 🚧 **В разработке:**
 - Anti-captcha интеграция (anti-captcha.com API)
-- Поддержка прокси в MCP сервере через переменные окружения
 
 ## Установка
 
@@ -212,7 +212,6 @@ avito-scraper/
 │   │       └── json.ts      # Сохранение в JSON
 │   ├── utils/
 │   │   ├── delays.ts        # Случайные задержки
-│   │   ├── user-agents.ts   # User-agent pool
 │   │   └── url-builder.ts   # Построение URL
 │   └── cli.ts               # CLI интерфейс
 ├── config/
@@ -228,10 +227,12 @@ avito-scraper/
 ```typescript
 {
   headless?: boolean;         // Headless режим (default: true)
+  userDataDir?: string;       // Постоянный отдельный профиль Chromium (MCP использует по умолчанию)
+  handleBrowserSignals?: boolean; // false, если приложение само закрывает scraper по сигналам (MCP)
   timeout?: number;           // Таймаут запросов (default: 30000ms)
   retries?: number;           // Повторные попытки (default: 3)
   delayMs?: [number, number]; // Задержка [min, max] (default: [1000, 3000])
-  userAgent?: string;         // Custom user-agent
+  userAgent?: string;         // Явная подмена; по умолчанию нативный UA Chromium
   captchaTimeoutMs?: number;  // Сколько ждать ручного решения капчи (default: 120000ms)
   captchaPollMs?: number;     // Как часто проверять решена ли капча (default: 3000ms)
   manualCaptchaFallback?: boolean; // При капче в headless — перезапустить браузер в видимом режиме (default: true)
@@ -255,15 +256,19 @@ avito-scraper/
 
 Scraper использует несколько техник для обхода детекции:
 
-- ✅ Случайные user-agents
+- ✅ Нативный User-Agent текущего Chromium, согласованный с платформой и Client Hints
 - ✅ Случайные задержки между запросами
-- ✅ Stealth mode (скрытие webdriver)
-- ✅ Реалистичные настройки браузера (viewport, locale, timezone)
-- ✅ Прокси поддержка (HTTP/HTTPS/SOCKS4/SOCKS5 с авторизацией)
+- ✅ Скрытие webdriver в обычном браузере и с постоянным профилем
+- ✅ Общие настройки браузера: viewport `1920×1080`, locale `ru-RU`, timezone `Europe/Moscow`
+- ✅ Прокси HTTP/HTTPS/SOCKS4/SOCKS5 (SOCKS4 передаёт USERID, а не пароль)
 - ✅ Ротация прокси (3 стратегии)
 - ✅ Ручное решение captcha (в non-headless режиме: попап в окне браузера + автопроверка)
 - ✅ Автопереход в видимый режим при капче в headless (manualCaptchaFallback)
 - 🚧 Решение captcha автоматическое (в планах)
+
+Случайные строки Firefox/старых Chrome и подмена `navigator.plugins` удалены: они противоречили фактическому Chromium. `plugins` и языковые свойства остаются нативными; локаль задаёт Playwright. Явный `userAgent` применяется в обоих режимах, но согласование произвольной строки с остальными свойствами — ответственность вызывающего кода. Эти настройки не гарантируют отсутствие детекции площадкой.
+
+Ручная проверка одинакова для CLI/API и MCP с профилем. Видимая CAPTCHA обрабатывается даже при HTTP 403; скрытые и пустые контейнеры не запускают ожидание. После решения scraper повторно открывает целевой URL с текущими cookies и прокси и проверяет HTTP-статус. Обычный отказ в доступе и HTTP 429 возвращаются как ошибки. По истечении `captchaTimeoutMs` окно остаётся открытым, а нерешённая проверка удерживает текущий прокси до решения или закрытия окна.
 
 ## Roadmap
 

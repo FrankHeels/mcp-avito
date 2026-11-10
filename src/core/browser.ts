@@ -2,9 +2,8 @@
  * Browser manager with Playwright
  */
 
-import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type LaunchOptions, type Page } from 'playwright';
 import ProxyChain from 'proxy-chain';
-import { getRandomUserAgent } from '../utils/user-agents.js';
 import type { ProxyConfig, ScraperOptions } from './types.js';
 
 export class BrowserManager {
@@ -12,7 +11,8 @@ export class BrowserManager {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private options: ScraperOptions;
-  private proxyServer: any = null;
+  private proxyServer: ProxyChain.Server | null = null;
+  private currentProxy: ProxyConfig | undefined;
   private opening: Promise<void> | null = null;
 
   constructor(options: ScraperOptions = {}) {
@@ -25,16 +25,39 @@ export class BrowserManager {
 
   async initialize(proxy?: ProxyConfig): Promise<void> {
     if (this.isInitialized()) return;
-    const opening = this.opening ??= this.open(proxy);
+    if (!this.opening && proxy) this.currentProxy = proxy;
+    const opening = this.opening ??= this.open(this.currentProxy);
     try {
       await opening;
+    } catch (error) {
+      // Clear opening before close(), which otherwise waits for this same promise.
+      if (this.opening === opening) this.opening = null;
+      await this.close();
+      throw error;
     } finally {
       if (this.opening === opening) this.opening = null;
     }
   }
 
   private async open(proxy?: ProxyConfig): Promise<void> {
-    const launchOptions: LaunchOptions = { headless: this.options.headless };
+    // A manually closed Chromium window can leave the SOCKS bridge running.
+    await this.proxyServer?.close(true);
+    this.proxyServer = null;
+    const launchOptions: LaunchOptions = {
+      headless: this.options.headless,
+      handleSIGINT: this.options.handleBrowserSignals ?? true,
+      handleSIGTERM: this.options.handleBrowserSignals ?? true,
+      handleSIGHUP: this.options.handleBrowserSignals ?? true,
+      args: ['--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage'],
+    };
+    // Keep the native UA, platform, Client Hints and PluginArray consistent by default.
+    // An explicit userAgent is a caller-controlled override, in either mode.
+    const contextOptions: BrowserContextOptions = {
+      userAgent: this.options.userAgent,
+      viewport: { width: 1920, height: 1080 },
+      locale: 'ru-RU',
+      timezoneId: 'Europe/Moscow',
+    };
 
     // Use local Chrome if available
     const localChromePath = process.env.CHROME_EXECUTABLE_PATH || './chrome-win64/chrome.exe';
@@ -53,40 +76,27 @@ export class BrowserManager {
       // Check if SOCKS proxy with authentication
       const isSocksWithAuth =
         (proxy.type === 'socks4' || proxy.type === 'socks5') &&
-        proxy.username &&
-        proxy.password;
+        proxy.username !== undefined;
 
       if (isSocksWithAuth) {
         console.error(`Настраиваем локальный прокси-туннель для ${proxy.type} с авторизацией...`);
-        console.error(`Верхний прокси: ${proxy.type}://${proxy.host}:${proxy.port} (пользователь: ${proxy.username})`);
-
-        const upstreamUrl = `${proxy.type}://${proxy.username}:${proxy.password}@${proxy.host}:${proxy.port}`;
+        const upstreamUrl = `${proxy.type}://${encodeURIComponent(proxy.username!)}:${encodeURIComponent(proxy.password ?? '')}@${proxy.host}:${proxy.port}`;
 
         // Create local HTTP proxy server with error handling
         this.proxyServer = new ProxyChain.Server({
+          host: '127.0.0.1',
           port: 0,
           verbose: false, // Disable verbose to reduce noise
-          prepareRequestFunction: ({ request, username, password, hostname, port, isHttp }) => {
-            console.error(`\n[PROXY] Запрос: ${request.method} ${request.url}`);
-            console.error(`[PROXY] Цель: ${hostname}:${port} (isHttp: ${isHttp})`);
-            return {
-              upstreamProxyUrl: upstreamUrl,
-              // Try forcing connection timeout
-              requestAuthentication: false,
-              // Don't require auth on local proxy
-              failMsg: 'Proxy connection failed',
-            };
-          },
+          prepareRequestFunction: () => ({
+            upstreamProxyUrl: upstreamUrl,
+            requestAuthentication: false,
+            failMsg: 'Proxy connection failed',
+          }),
         });
 
-        // Add error handler
-        this.proxyServer.on('connectionClosed', ({ connectionId, stats }: any) => {
-          console.error(`[PROXY] Соединение ${connectionId} закрыто — отправлено ${stats.srcTxBytes} байт, получено ${stats.srcRxBytes} байт`);
-        });
-
-        this.proxyServer.on('requestFailed', ({ request, error }: any) => {
-          console.error(`[PROXY] Запрос не удался: ${request?.url}`);
-          console.error(`[PROXY] Ошибка: ${error?.message}`);
+        // Upstream library errors can contain the full URL, including credentials.
+        this.proxyServer.on('requestFailed', () => {
+          console.error('[PROXY] Не удалось выполнить запрос через прокси.');
         });
 
         await this.proxyServer.listen();
@@ -104,9 +114,9 @@ export class BrowserManager {
         launchOptions.proxy = {
           server: `${proxy.type}://${proxy.host}:${proxy.port}`,
         };
-        if (proxy.username && proxy.password) {
+        if (proxy.username !== undefined) {
           launchOptions.proxy.username = proxy.username;
-          launchOptions.proxy.password = proxy.password;
+          launchOptions.proxy.password = proxy.password ?? '';
         }
       }
     }
@@ -114,62 +124,22 @@ export class BrowserManager {
     if (this.options.userDataDir) {
       const context = await chromium.launchPersistentContext(this.options.userDataDir, {
         ...launchOptions,
+        ...contextOptions,
         chromiumSandbox: true,
-        locale: 'ru-RU',
-        viewport: null,
       });
       this.context = context;
       this.page = context.pages()[0] ?? null;
-      this.page?.setDefaultTimeout(this.options.timeout ?? 30000);
       context.once('close', () => {
         if (this.context === context) {
           this.context = null;
           this.page = null;
         }
       });
-      return;
+    } else {
+      this.browser = await chromium.launch(launchOptions);
+      this.context = await this.browser.newContext(contextOptions);
     }
-
-    this.browser = await chromium.launch({
-      ...launchOptions,
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--no-sandbox',
-      ],
-    });
-
-    // Create context with stealth settings
-    this.context = await this.browser.newContext({
-      userAgent: this.options.userAgent || getRandomUserAgent(),
-      viewport: {
-        width: 1920,
-        height: 1080,
-      },
-      locale: 'ru-RU',
-      timezoneId: 'Europe/Moscow',
-    });
-
-    // Add stealth scripts
-    await this.context.addInitScript(() => {
-      // @ts-ignore - runs in browser context
-      // Hide webdriver property
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => false,
-      });
-
-      // @ts-ignore - runs in browser context
-      // Mock plugins
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => [1, 2, 3, 4, 5],
-      });
-
-      // @ts-ignore - runs in browser context
-      // Mock languages
-      Object.defineProperty(navigator, 'languages', {
-        get: () => ['ru-RU', 'ru', 'en-US', 'en'],
-      });
-    });
+    this.context.setDefaultTimeout(this.options.timeout ?? 30000);
   }
 
   /**

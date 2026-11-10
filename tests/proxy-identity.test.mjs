@@ -38,6 +38,6 @@ test('changing strategy preserves all authenticated sessions', () => {
   manager.setRotationStrategy('round-robin');
   assert.equal(manager.getStats().active, 3);
   const selected = new Set();
-  for (let n = 0; n < 3; n++) { selected.add(manager.getProxy()); }
+  for (let n = 0; n < 3; n++) { selected.add(manager.getProxy()); manager.recordRequest(); }
   assert.equal(selected.size, 3);
 });

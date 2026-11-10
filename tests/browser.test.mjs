@@ -37,7 +37,7 @@ test('dedicated profile keeps cookies and reopens after closing the window', asy
 
 test('interactive browser reports access errors and stays usable for the next card', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'avito-browser-'));
-  const scraper = new AvitoScraper({ headless: true, userDataDir, delayMs: [0, 0] });
+  const scraper = new AvitoScraper({ headless: true, userDataDir, delayMs: [0, 0], manualCaptchaFallback: false });
   const pages = new Map([
     ['/denied', [403, '<h1>Forbidden</h1>']],
     ['/rate-limited', [429, '<h1>Too many requests</h1>']],

@@ -3,12 +3,35 @@
  */
 
 import { readFile } from 'fs/promises';
-import type { ProxyConfig, ProxyRotationStrategy, ProxyStats } from './types.js';
+import { ProxyError, type ProxyConfig, type ProxyRotationStrategy, type ProxyStats } from './types.js';
 import type { IProxyRotationStrategy } from '../plugins/proxy/base.js';
 import { SequentialRotation } from '../plugins/proxy/sequential.js';
 import { RandomRotation } from '../plugins/proxy/random.js';
 import { RoundRobinRotation } from '../plugins/proxy/round-robin.js';
 import { getProxyKey } from './proxy-identity.js';
+
+/** Parse a proxy endpoint without ever including credentials in an error. */
+export function parseProxyUrl(value: string): ProxyConfig | null {
+  try {
+    if (!/^(https?|socks[45]):\/\//.test(value) || /\s/.test(value)) return null;
+    const url = new URL(value);
+    const authority = value.split('://')[1].split('/')[0];
+    const portMatch = authority.match(/:(\d+)$/);
+    const port = Number(portMatch?.[1]);
+    if (!url.hostname || !portMatch || !Number.isInteger(port) || port < 1 || port > 65535 ||
+        (url.pathname && url.pathname !== '/') || url.search || url.hash ||
+        (url.password && !url.username)) return null;
+    return {
+      type: url.protocol.slice(0, -1) as ProxyConfig['type'],
+      host: url.hostname,
+      port,
+      username: url.username ? decodeURIComponent(url.username) : undefined,
+      password: url.username ? decodeURIComponent(url.password) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export class ProxyManager {
   private strategy: IProxyRotationStrategy;
@@ -33,63 +56,25 @@ export class ProxyManager {
    * Example: socks5://user:pass@127.0.0.1:1080
    */
   async loadFromFile(filePath: string): Promise<number> {
+    let content: string;
     try {
-      const content = await readFile(filePath, 'utf-8');
-      const lines = content.split('\n');
-      let loadedCount = 0;
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-
-        // Skip empty lines and comments
-        if (!trimmed || trimmed.startsWith('#')) {
-          continue;
-        }
-
-        const proxy = this.parseProxyString(trimmed);
-        if (proxy) {
-          this.strategy.addProxy(proxy);
-          loadedCount++;
-        } else {
-          console.error(`Не удалось распарсить прокси: ${trimmed}`);
-        }
-      }
-
-      console.error(`Загружено ${loadedCount} прокси из ${filePath}`);
-      return loadedCount;
-    } catch (error) {
-      console.error(`Не удалось загрузить прокси из ${filePath}:`, error);
-      return 0;
+      content = await readFile(filePath, 'utf-8');
+    } catch {
+      throw new ProxyError('Не удалось прочитать файл прокси. Проверьте PROXY_LIST_FILE и права доступа.');
     }
-  }
-
-  /**
-   * Parse proxy string
-   * Supports: http://, https://, socks4://, socks5://
-   * With or without auth: user:pass@host:port
-   */
-  private parseProxyString(proxyString: string): ProxyConfig | null {
-    try {
-      // Match pattern: protocol://[username:password@]host:port
-      const regex = /^(https?|socks[45]):\/\/(?:([^:]+):([^@]+)@)?([^:]+):(\d+)$/;
-      const match = proxyString.match(regex);
-
-      if (!match) {
-        return null;
-      }
-
-      const [, type, username, password, host, port] = match;
-
-      return {
-        type: type as 'http' | 'https' | 'socks4' | 'socks5',
-        host,
-        port: parseInt(port, 10),
-        username: username || undefined,
-        password: password || undefined,
-      };
-    } catch (error) {
-      return null;
+    const proxies: ProxyConfig[] = [];
+    for (const [index, line] of content.split('\n').entries()) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const proxy = parseProxyUrl(trimmed);
+      if (!proxy) throw new ProxyError(`Некорректный прокси в строке ${index + 1} файла прокси.`);
+      proxies.push(proxy);
     }
+    if (!proxies.length) throw new ProxyError('Файл прокси пуст: добавьте хотя бы один прокси.');
+    // Commit only after every line has been validated, so retries cannot duplicate the pool.
+    proxies.forEach((proxy) => this.strategy.addProxy(proxy));
+    console.error(`Загружено ${proxies.length} прокси`);
+    return proxies.length;
   }
 
   /**
@@ -112,8 +97,12 @@ export class ProxyManager {
       }
     }
 
-    this.requestCount++;
     return this.currentProxy;
+  }
+
+  /** Count actual navigations, not browser initialization or recovery. */
+  recordRequest(): void {
+    this.requestCount++;
   }
 
   /**
@@ -228,7 +217,6 @@ export class ProxyManager {
    * Format proxy config to string
    */
   private formatProxyString(proxy: ProxyConfig): string {
-    const auth = proxy.username && proxy.password ? `${proxy.username}:***@` : '';
-    return `${proxy.type}://${auth}${proxy.host}:${proxy.port}`;
+    return `${proxy.type}://${proxy.host}:${proxy.port}`;
   }
 }

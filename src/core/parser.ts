@@ -316,7 +316,7 @@ export class AvitoParser {
   }
 
   /**
-   * Detect if captcha is present
+   * Detect a visible challenge, not a hidden widget or a plain access-denied page.
    */
   async detectCaptcha(page: Page): Promise<boolean> {
     const captchaSelectors = [
@@ -328,30 +328,39 @@ export class AvitoParser {
       '[data-marker="shield"]',
     ];
 
-    for (const selector of captchaSelectors) {
-      const element = await page.$(selector);
-      if (element) {
-        return true;
+    for (const frame of page.frames()) {
+      if (frame.isDetached()) continue;
+      // A challenge inside a hidden (possibly nested) frame is not interactive.
+      let visibleFrame = true;
+      for (let ancestor = frame; ancestor.parentFrame(); ancestor = ancestor.parentFrame()!) {
+        const element = await ancestor.frameElement();
+        try {
+          visibleFrame = await element.isVisible();
+        } finally {
+          await element.dispose();
+        }
+        if (!visibleFrame) break;
       }
-    }
-
-    // Check page title
-    const title = await page.title();
-    if (title.toLowerCase().includes('captcha')) {
-      return true;
-    }
-
-    // Avito firewall page: title "Доступ ограничен: проблема с IP".
-    // The body text of this stub renders inside an iframe, so the title is
-    // the only reliable signal.
-    if (title.includes('Доступ ограничен') || title.includes('проблема с IP')) {
-      return true;
-    }
-
-    // Avito firewall page: "Доступ ограничен: проблема с IP" + captcha
-    const bodyText = (await page.evaluate(() => document.body?.innerText || '')) || '';
-    if (bodyText.includes('Доступ ограничен') || bodyText.includes('проблема с IP')) {
-      return true;
+      if (!visibleFrame) continue;
+      const active = await frame.evaluate((selectors) => {
+        const visible = (element: Element): boolean => {
+          const rect = element.getBoundingClientRect();
+          if (!rect.width || !rect.height) return false;
+          for (let node: Element | null = element; node; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            if (style.display === 'none' || style.visibility === 'hidden' ||
+                style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+          }
+          return true;
+        };
+        return Array.from(document.querySelectorAll(selectors.join(','))).some((element) => {
+          if (!visible(element)) return false;
+          if (element.matches('iframe, img, canvas, input, button')) return true;
+          if (element instanceof HTMLElement && element.innerText.trim()) return true;
+          return Array.from(element.querySelectorAll('iframe, img, canvas, input, button, svg')).some(visible);
+        });
+      }, captchaSelectors);
+      if (active) return true;
     }
 
     return false;
