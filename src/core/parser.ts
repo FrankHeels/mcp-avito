@@ -5,7 +5,7 @@
 import type { Page } from 'playwright';
 import type { SearchResult, ItemDetails } from './types.js';
 import { normalizeItemUrl } from '../utils/url-builder.js';
-import { parseAvailableQuantity, parseSellerReviewCount } from './item-counts.js';
+import { parseAvailableQuantity, parseSellerReviews } from './item-counts.js';
 
 export class AvitoParser {
   /**
@@ -66,6 +66,11 @@ export class AvitoParser {
           const dateEl = element.querySelector('[data-marker="item-date"]');
           const publishedAt = dateEl?.textContent?.trim() || '';
 
+          // Read seller reviews only inside this search card.
+          const reviewCaptions = Array.from(element.querySelectorAll(
+            '[data-marker="seller-info/summary"]',
+          )).flatMap((summary) => [text(summary), summary.getAttribute('aria-label') || '']);
+
           // Extract ID from data attribute or URL
           const itemId =
             element.getAttribute('data-item-id') ||
@@ -83,6 +88,7 @@ export class AvitoParser {
               imageUrl,
               description,
               publishedAt,
+              reviewCaptions,
             });
           }
         } catch (error) {
@@ -93,10 +99,12 @@ export class AvitoParser {
       return items;
     });
 
-    // Normalize URLs
-    return results.map((item) => ({
+    // Normalize URLs and counts outside the browser context. Keep every card:
+    // the caller filters before requesting details, not during pagination.
+    return results.map(({ reviewCaptions, ...item }) => ({
       ...item,
       url: normalizeItemUrl(item.url),
+      seller: parseSellerReviews(reviewCaptions),
     }));
   }
 
@@ -308,7 +316,7 @@ export class AvitoParser {
       ...item,
       seller: {
         ...item.seller,
-        reviewsCount: parseSellerReviewCount(reviewCaptions),
+        ...parseSellerReviews(reviewCaptions),
       },
       availableQuantity,
       availabilityNote: availableQuantity === null ? 'уточнить у продавца' : null,

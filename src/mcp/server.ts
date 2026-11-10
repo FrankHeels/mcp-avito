@@ -40,10 +40,12 @@ function isAvitoUrl(value: unknown): value is string {
 }
 
 // Define available tools
+const sellerReviewsGuidance = 'Each result includes seller.reviewsCount (null means unknown) and seller.reviewsCountApproximate (true for abbreviated counts such as 1.2 thousand). Before calling avito_get_details, compare exact counts against the user\'s review criteria and skip nonmatching items. Keep unknown or approximate counts for verification in details when an exact threshold matters. Search returns all cards without review filtering; continue pagination even if no candidates on a page meet the review criteria.';
+
 const tools: Tool[] = [
   {
     name: 'avito_search',
-    description: 'Search for items on Avito.ru marketplace. Returns up to 50 results per page with item details including title, price, location, and URL.',
+    description: 'Search for items on Avito.ru marketplace. Returns up to 50 results per page including title, price, location, and URL. ' + sellerReviewsGuidance,
     inputSchema: {
       type: 'object',
       properties: {
@@ -78,7 +80,7 @@ const tools: Tool[] = [
   },
   {
     name: 'avito_get_details',
-    description: 'Get Avito item details, including full description, seller review count, and exact advertised quantity when shown. A null quantity includes a note to ask the seller.',
+    description: 'Get Avito item details, including full description, seller review count with seller.reviewsCountApproximate, and exact advertised quantity when shown. A null quantity includes a note to ask the seller. When selecting search results by seller reviews, filter using the search result counts before calling this tool; skip items with exact counts outside the user\'s criteria. Unknown or approximate counts may need verification here; details can also have unknown or approximate counts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -92,7 +94,7 @@ const tools: Tool[] = [
   },
   {
     name: 'avito_search_all',
-    description: 'Search all pages on Avito.ru for the given query. This will iterate through all available pages and return ALL matching items. Use with caution as it may take a long time and return many results.',
+    description: 'Search all pages on Avito.ru for the given query. This will iterate through all available pages and return ALL matching items. Use with caution as it may take a long time and return many results. ' + sellerReviewsGuidance,
     inputSchema: {
       type: 'object',
       properties: {

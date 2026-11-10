@@ -172,9 +172,64 @@ test('search: cards without data-geo-name still yield location; price falls back
     assert.equal(items[0].price, 19990);
     assert.ok(items[0].location.includes('Калининград'), `location, got: ${items[0].location}`);
     assert.ok(items[0].url.includes('4718346312'));
+    assert.deepEqual(items[0].seller, { reviewsCount: 15, reviewsCountApproximate: false });
 
     // second card has no meta price — parsed from "22 990 ₽" text
     assert.equal(items[1].price, 22990);
     assert.ok(items[1].location.includes('Казань'), `location, got: ${items[1].location}`);
+    assert.deepEqual(items[1].seller, { reviewsCount: 1200, reviewsCountApproximate: true });
+  });
+});
+
+test('search: reviews stay scoped to each card; missing counts do not remove cards', async () => {
+  await withPage('search-page.html', async (parser, page) => {
+    const summaries = [
+      '',
+      '<p data-marker="seller-info/summary">Нет отзывов</p>',
+      '<p data-marker="seller-info/summary">Проверенный продавец</p>',
+      '<p data-marker="seller-info/summary" aria-label="1 234 отзыва">1,2 тыс. отзывов</p>',
+      '<p data-marker="seller-info/summary">15 отзывов</p><p data-marker="seller-info/summary">16 отзывов</p>',
+    ];
+    await page.setContent(`
+      <p data-marker="seller-info/summary">999 отзывов</p>
+      ${summaries.map((summary, index) => `
+        <div data-marker="item" data-item-id="${index}">
+          <a itemprop="url" href="/test/${index}"><h3 itemprop="name">Item ${index}</h3></a>
+          <p data-marker="rating-caption/rating">57 отзывов</p>
+          ${summary}
+        </div>
+      `).join('')}
+    `);
+    const items = await parser.parseSearchResults(page);
+    assert.equal(items.length, summaries.length);
+    assert.deepEqual(items.map(({ seller }) => seller), [
+      { reviewsCount: null, reviewsCountApproximate: false },
+      { reviewsCount: 0, reviewsCountApproximate: false },
+      { reviewsCount: null, reviewsCountApproximate: false },
+      { reviewsCount: 1234, reviewsCountApproximate: false },
+      { reviewsCount: null, reviewsCountApproximate: false },
+    ]);
+    assert.ok(items.every((item) => !('reviewCaptions' in item)));
+  });
+});
+
+test('details: abbreviated seller count preserves precision metadata', async () => {
+  await withPage('item-page-new.html', async (parser, page) => {
+    await page.setContent(`
+      <h1>SSD</h1>
+      <div data-marker="item-view/seller-info">
+        <span data-marker="rating-caption/rating">1,2 тыс. отзывов</span>
+      </div>
+    `);
+    const approximate = await parser.parseItemDetails(page);
+    assert.equal(approximate.seller.reviewsCount, 1200);
+    assert.equal(approximate.seller.reviewsCountApproximate, true);
+
+    await page.locator('[data-marker="rating-caption/rating"]').evaluate((element) => {
+      element.setAttribute('aria-label', '1 234 отзыва');
+    });
+    const exact = await parser.parseItemDetails(page);
+    assert.equal(exact.seller.reviewsCount, 1234);
+    assert.equal(exact.seller.reviewsCountApproximate, false);
   });
 });

@@ -25,15 +25,26 @@ async function main() {
       console.log(`${index + 1}. ${item.title}`);
       console.log(`   Price: ${item.price} ₽`);
       console.log(`   Location: ${item.location}`);
+      console.log(`   Seller reviews: ${item.seller.reviewsCountApproximate ? '≈' : ''}${item.seller.reviewsCount ?? 'unknown'}`);
       console.log(`   URL: ${item.url}\n`);
     });
 
-    // Get details of first result
-    if (results.length > 0) {
-      console.log('Fetching details of first item...');
-      const details = await scraper.getItemDetails(results[0].url);
+    // Example user criterion: at least 100 seller reviews. Filter AFTER search
+    // and BEFORE details (avito_get_details for MCP clients). Unknown/rounded
+    // counts need verification; search itself must keep all cards for pagination.
+    const minReviews = 100;
+    const candidates = results.filter(({ seller }) =>
+      seller.reviewsCount === null || seller.reviewsCountApproximate ||
+      seller.reviewsCount >= minReviews,
+    );
+    if (candidates.length > 0) {
+      console.log('Fetching details of first candidate...');
+      const details = await scraper.getItemDetails(candidates[0].url);
       console.log(`\nDetails:`);
       console.log(`Seller: ${details.seller.name}`);
+      const reviews = details.seller;
+      console.log(`Review criterion: ${reviews.reviewsCount === null || reviews.reviewsCountApproximate
+        ? 'unconfirmed' : reviews.reviewsCount >= minReviews ? 'matched' : 'not matched'}`);
       console.log(`Views: ${details.viewsCount}`);
       console.log(`Images: ${details.images.length}`);
     }

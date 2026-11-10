@@ -1,6 +1,9 @@
+import type { SellerReviews } from './types.js';
+
 const integer = String.raw`(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)`;
 const unit = String.raw`(?:шт(?:ук[аи]?)?|ед(?:иниц[аы]?)?)\.?`;
 const reviewCount = new RegExp(String.raw`^(${integer})\s+отзыв(?:а|ов)?$`, 'iu');
+const abbreviatedReviewCount = /^(\d+)(?:[.,](\d{1,3}))?\s*тыс\.?\s+отзыв(?:а|ов)?$/iu;
 const quantityField = new RegExp(String.raw`^(${integer})(?:\s*${unit})?$`, 'iu');
 const stockStatement = new RegExp(
   String.raw`^(?:в\s+наличии(?:\s*:\s*|\s+[–—-]\s+|\s+)(${integer})(?:\s*${unit})?|(${integer})\s*${unit}\s+в\s+наличии)[.!]?$`,
@@ -13,16 +16,33 @@ function parseCount(value: string | undefined): number | null {
   return Number.isSafeInteger(count) ? count : null;
 }
 
-export function parseSellerReviewCount(captions: string[]): number | null {
+export function parseSellerReviews(captions: string[]): SellerReviews {
   const counts = new Set<number>();
+  const approximateCounts = new Set<number>();
   for (const caption of captions) {
     const text = caption.trim();
     const count = /^(?:(?:пока )?нет отзывов|отзывов нет)$/iu.test(text)
       ? 0
       : parseCount(text.match(reviewCount)?.[1]);
     if (count !== null) counts.add(count);
+    const abbreviated = text.match(abbreviatedReviewCount);
+    if (abbreviated) {
+      // Scale the decimal parts separately to avoid floating-point rounding.
+      const approximate = Number(abbreviated[1]) * 1000 +
+        Number((abbreviated[2] || '').padEnd(3, '0'));
+      if (Number.isSafeInteger(approximate)) approximateCounts.add(approximate);
+    }
   }
-  return counts.size === 1 ? [...counts][0] : null;
+  // An exact aria-label can accompany an abbreviated visible caption.
+  if (counts.size > 0) {
+    return { reviewsCount: counts.size === 1 ? [...counts][0] : null, reviewsCountApproximate: false };
+  }
+  const approximate = approximateCounts.size === 1 ? [...approximateCounts][0] : null;
+  return { reviewsCount: approximate, reviewsCountApproximate: approximate !== null };
+}
+
+export function parseSellerReviewCount(captions: string[]): number | null {
+  return parseSellerReviews(captions).reviewsCount;
 }
 
 export function parseAvailableQuantity(

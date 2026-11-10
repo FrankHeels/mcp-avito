@@ -14,6 +14,12 @@ export interface SearchFilters {
   sort?: 'date' | 'price_asc' | 'price_desc' | 'default';
 }
 
+export interface SellerReviews {
+  reviewsCount: number | null;
+  // True for abbreviated counts such as "1,2 тыс. отзывов".
+  reviewsCountApproximate: boolean;
+}
+
 export interface SearchResult {
   id: string;
   title: string;
@@ -24,6 +30,7 @@ export interface SearchResult {
   imageUrl?: string;
   description?: string;
   publishedAt?: string;
+  seller: SellerReviews;
 }
 
 export interface ItemDetails extends SearchResult {
@@ -31,9 +38,8 @@ export interface ItemDetails extends SearchResult {
   images: string[];
   availableQuantity: number | null;
   availabilityNote: 'уточнить у продавца' | null;
-  seller: {
+  seller: SellerReviews & {
     name: string;
-    reviewsCount: number | null;
     rating?: number;
     registeredAt?: string;
     url?: string;
